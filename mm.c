@@ -66,6 +66,7 @@ typedef struct LinkedList {
 static LinkedList* head;
 static LinkedList* tail;
 
+
 static inline unsigned long MAX(size_t x, size_t y) {
     return ((x) > (y)? (x) : (y));
 }
@@ -73,7 +74,7 @@ static inline unsigned long MAX(size_t x, size_t y) {
 /* Pack a size and allocated bit into a word */
 static inline unsigned long PACK(size_t size, int alloc) {
     return ((size) | (alloc));
-} 
+}
 
 /* Read and write a word at address p */
 static inline unsigned long GET(void *p) {
@@ -87,11 +88,11 @@ static inline void PUT(void* p, unsigned long val) {
 /* Read the size and allocated fields from address p */
 static inline unsigned long GET_SIZE(void* p) {
     return (GET(p) & ~0x7);
-} 
+}
 
 static inline unsigned long GET_ALLOC(void* p) {
     return (GET(p) & 0x1);
-} 
+}
 
 /* Given block ptr bp, compute address of its header and footer */
 static inline void* HDRP(void* bp) {
@@ -111,63 +112,15 @@ static inline void* PREV_BLKP(void* bp) {
     return ((void *)(bp) - GET_SIZE(((void *)(bp) - DSIZE)));
 }
 
-
-/*Implement Add/Remove block functions for our explicit free list*/
-// add a block to free list. If the list is empty, ptr of head and tail to the new added block
-// if not empty, add to existing list, LIFO from book and add all blocks to tail
-
-void addBlock(LinkedList* p) {
-    p->prev = NULL;
-    p->next = NULL;
-
-    if(head == NULL) {
-        head = p;
-        tail = p;
-        p->next = NULL;
-        p->prev = NULL;
-    }
-
-    else {
-        tail->next = p;
-        p->prev = tail;
-        tail = p;
-        p->next = NULL;
-    }
+/* rounds up to the nearest multiple of ALIGNMENT */
+static size_t align(size_t x)
+{
+    return ALIGNMENT * ((x+ALIGNMENT-1)/ALIGNMENT);
 }
 
-// Function to remove a block from free list when called in malloc
-
-// First case: only head node, so set head and tail to NULL
-// other nodes than head, update head, at the end of list remove the last node and update tail
-// node in middlde, update prev and next 
-
-void removeBlock(LinkedList* p) {
-    if(p == head && p == tail) {
-        tail = head = NULL;
-    }
-
-    else if (p == head && p != tail) {
-        p->next->prev = NULL;
-        head = head->next;
-    }
-
-    else if(p == tail) {
-        p->prev->next = NULL;
-        tail = tail->prev;
-    }
-
-    else {
-        p->next->prev = p->prev;
-        p->prev->next = p->next;
-    }
-}
-
-// Implement some helper functions
-
-/*1. Coalesce function: (taken directly from book with some minor changes)
-merge the free blocks uses boundary-tag coalescing to merge it
-with any adjacent free blocks in constant time.
-*/
+/*
+ * Initialize: returns false on error, true on success.
+ */
 
 static void *coalesce(void *bp)
 {
@@ -180,9 +133,7 @@ static void *coalesce(void *bp)
     }
 
     else if (prev_alloc && !next_alloc) { /* Case 2: Prev is allocated, but next is not, so remove the next & current block */
-        removeBlock((LinkedList *)(bp));
-        removeBlock((LinkedList *)NEXT_BLKP(bp));
-        size += GET_SIZE(HDRP(NEXT_BLKP(bp))); 
+        size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
 
         PUT(HDRP(bp), PACK(size, 0));
         PUT(FTRP(bp), PACK(size,0));
@@ -190,27 +141,21 @@ static void *coalesce(void *bp)
 
     else if (!prev_alloc && next_alloc) { /* Case 3: next is allocated but previous is not, so remove current and prev block */
         size += GET_SIZE(HDRP(PREV_BLKP(bp)));
-        removeBlock((LinkedList *)(bp));
-		removeBlock((LinkedList *)(PREV_BLKP(bp)));
         PUT(FTRP(bp), PACK(size, 0));
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
         bp = PREV_BLKP(bp);
     }
 
     else { /* Case 4: all free */
-        removeBlock((LinkedList *)PREV_BLKP((bp)));
-		removeBlock((LinkedList *)(bp));
-		removeBlock((LinkedList *)NEXT_BLKP((bp)));
         size += GET_SIZE(HDRP(PREV_BLKP(bp))) +
         GET_SIZE(FTRP(NEXT_BLKP(bp)));
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
         PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
         bp = PREV_BLKP(bp);
     }
-
-    addBlock((LinkedList *)(bp));
     return bp;
 }
+
 
 /*2. Extend Heap Function (Taken from book as well): this extends the heap with a new free block
 It utilizes the PUT function to initialize the header, footer to extend the heap in malloc*/
@@ -229,12 +174,11 @@ static void *extend_heap(size_t words)
     PUT(HDRP(bp), PACK(size, 0)); /* Free block header */
     PUT(FTRP(bp), PACK(size, 0)); /* Free block footer */
     PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1)); /* New epilogue header */
-    addBlock((LinkedList *)(bp));
     /* Coalesce if the previous block was free */
     return coalesce(bp);
 }
 
-/*3. Find Fit Function (similar to book): this function find the available space in the heap and returns a pointer to location*/
+/*3. Find Fit Function (similar to book): this function find the available space in the heap and return*/
 
 static void *find_fit(size_t asize)
 {
@@ -252,27 +196,24 @@ static void *find_fit(size_t asize)
 return NULL; /* No fit */
 }
 
-/*4. Place Function (similar to book): It uses the ptr to the requested block, and split the blocks if the remaining are greater than or equal
+/*4. Place Function (similar to book): It uses the ptr to the requested block, and split the blocks if$
 to the minimum block size*/
 
 static void place(void *bp, size_t asize)
 {
     size_t csize = GET_SIZE(HDRP(bp));
-    
+
     if ((csize - asize) >= (2*DSIZE)) {
         PUT(HDRP(bp), PACK(asize, 1));
         PUT(FTRP(bp), PACK(asize, 1));
-        removeBlock((LinkedList *)(bp));
         bp = NEXT_BLKP(bp);
         PUT(HDRP(bp), PACK(csize-asize, 0));
         PUT(FTRP(bp), PACK(csize-asize, 0));
-        addBlock((LinkedList *)(bp));
     }
 
     else {
         PUT(HDRP(bp), PACK(csize, 1));
         PUT(FTRP(bp), PACK(csize, 1));
-        removeBlock((LinkedList *)(bp));
     }
 }
 
@@ -281,18 +222,12 @@ static void place(void *bp, size_t asize)
  */
 
 // From book as well, just made some minor changes: creates a heap with initial free block
-// The function gets four words from the memory system and initializes them to create the empty free list 
+// The function gets four words from the memory system and initializes them to create the empty free l$
 
-/* rounds up to the nearest multiple of ALIGNMENT */
-static size_t align(size_t x)
-{
-    return ALIGNMENT * ((x+ALIGNMENT-1)/ALIGNMENT);
-}
 
 bool mm_init(void)
 {
     /* IMPLEMENT THIS */
-    /* Create the initial empty heap */
     head = NULL;
     tail = NULL;
     if ((heap_listp = mem_sbrk(4*WSIZE)) == (void *) - 1) {
@@ -305,7 +240,7 @@ bool mm_init(void)
     PUT(heap_listp + (3*WSIZE), PACK(0, 1)); /* Epilogue header */
 
     heap_listp += (2*WSIZE);
-    
+
     /* Extend the empty heap with a free block of CHUNKSIZE bytes */
     if (extend_heap(CHUNKSIZE/WSIZE) == NULL) {
         return false;
@@ -316,14 +251,12 @@ bool mm_init(void)
 /*
  * malloc
  */
-/*Function taken from the book, that allocates a block from the free list*/
 void* malloc(size_t size)
 {
     /* IMPLEMENT THIS */
     size_t asize; /* Adjusted block size */
-    //size_t extendsize; /* Amount to extend heap if no fit */
     void *bp;
-    
+
     /* Ignore spurious requests */
     if (size == 0) {
         return NULL;
@@ -344,9 +277,7 @@ void* malloc(size_t size)
     }
 
     /* No fit found. Get more memory and place the block */
-
-    //extendsize = MAX(asize,CHUNKSIZE);
-    if ((bp = extend_heap(asize/WSIZE)) == NULL) 
+    if ((bp = extend_heap(asize/WSIZE)) == NULL)
         return NULL;
     place(bp, asize);
     return bp;
@@ -355,28 +286,19 @@ void* malloc(size_t size)
 /*
  * free
  */
-/*Taken from book: frees a block and uses boundary-tag coalescing to merge it
-with any adjacent free blocks in constant time.*/
 void free(void* ptr)
 {
     /* IMPLEMENT THIS */
     size_t size = GET_SIZE(HDRP(ptr));
-    
+
     PUT(HDRP(ptr), PACK(size, 0));
     PUT(FTRP(ptr), PACK(size, 0));
-    addBlock((LinkedList *)(ptr));
     coalesce(ptr);
 }
 
 /*
  * realloc
  */
-/* realloc will check the cases given in the project description
-ptr == NULL, we will allocate the given size and if size is zero, then we will free the ptr
-cases also where we have to check if requested size is greater than or less than the current size.
-
-By using memlib.c, we will set a pointer to malloc the size and mem_memcpy to copy the info and free the ptr
-*/
 void* realloc(void* oldptr, size_t size)
 {
     /* IMPLEMENT THIS */
@@ -452,3 +374,9 @@ bool mm_checkheap(int lineno)
 #endif /* DEBUG */
     return true;
 }
+
+
+
+
+
+

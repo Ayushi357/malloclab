@@ -2,12 +2,26 @@
  * mm.c
  *
  * Name: Ayushi Agrawal [aja6540], Adithya Krishnan Kannan [apk5863]
- *
- * NOTE TO STUDENTS: Replace this header comment with your own header
- * comment that gives a high level description of your solution.
- * Also, read malloclab.pdf carefully and in its entirety before beginning.
- *
  */
+
+/* Our Overall malloc design
+*
+From the submission of our first checkpoint, we have changed the design from implementing an implementing free list to 
+an explicit free list which helped us improve the throughput. For this design we had to do a lot of pointer arithmetic and implemented a list 
+that would give a new structure to our free list. We used the global variables for defining head and tail to be used throughout the code 
+including our heap checker. 
+We added some helper functions like append_block and delete_block that would help us update our list (add and remove nodes) during every function.
+When the block is allocated or freed this function takes their effect.
+For the append_block function implementation, we considered all the cases while we are adding to our linked list. We initially defined prev and next
+pointers to NULL to avoid overwritting problems. And other cases such as when list is empty and when the list is not empty. These steps will ensure that 
+the nodes stay linked no matter where they are in the memory of the heap. 
+The delete_block function also had some similar cases that needed to be considered like: remove from the end of the list, i.e. setting tail = NULL
+and remove from the begining of the list. From the checkpoint 1 code we looked through where these append_block and delete_block functions needed 
+to be called i.e., in coalesce, extend_heap, place and the free functions. We also implemented our find_fit function to work according to our explicit list
+by simply iterating throughout the list to find a fit.
+*
+*
+*/
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,7 +38,7 @@
  * uncomment the following line. Be sure not to have debugging enabled
  * in your final submission.
  */
-// #define DEBUG
+#define DEBUG
 
 #ifdef DEBUG
 /* When debugging is enabled, the underlying functions get called */
@@ -55,17 +69,64 @@
 #define DSIZE 16 /* Double word size (bytes) */
 #define CHUNKSIZE (1<<12) /* Extend heap by this amount (byte) */
 
-static void* heap_listp;
+static void* heap_listp; /* pointer to the prolouge header */
 
 typedef struct LinkedList_s {
     struct LinkedList_s* prev;
     struct LinkedList_s* next;
-	struct LinkedList_s* curr;
-	struct LinkedList_s* node;
 } LinkedList;
 
 static LinkedList* head;
 static LinkedList* tail;
+
+/* Defining Functions Prototypes */
+void append_block(LinkedList *bp);
+void delete_block(LinkedList *bp);
+static void *coalesce(void *bp);
+static void *extend_heap(size_t words);
+static void *find_fit(size_t asize);
+static void place(void *bp, size_t asize);
+bool mm_init(void);
+void* malloc(size_t size);
+void free(void* ptr);
+static void set_nodes(LinkedList* bp);
+static void insert_block(LinkedList *bp);
+static void delete_head(LinkedList* bp);
+void* realloc(void* oldptr, size_t size);
+void* calloc(size_t nmemb, size_t size);
+bool mm_checkheap(int lineno);
+
+static void delete_head(LinkedList* bp) {
+	tail = NULL;
+	head = NULL;
+}
+
+static void delete_middle(LinkedList* bp) {
+	bp->next->prev = bp->prev;
+	bp->prev->next = bp->next;
+}
+
+static void delete_tail(LinkedList* bp) {
+	bp->prev->next = NULL;
+	tail = tail->prev;
+}
+
+static void delete_node(LinkedList* bp) {
+	bp->next->prev = NULL;
+	head = head->next;
+}
+
+static void set_nodes(LinkedList* bp) {
+	bp->next = NULL;
+	bp->prev = NULL;
+}
+
+static void insert_block(LinkedList *bp) {
+	tail->next = bp;
+	bp->prev = tail;
+	tail = bp;
+	bp->next = NULL;
+}
 
 /*To implement Explicit Free List */
 
@@ -76,25 +137,15 @@ static LinkedList* tail;
 // And if the list is not empty, use LIFO to add all free blocks to tail. 
 
 void append_block(LinkedList *bp) {
-	bp->next = NULL;
-	bp->prev = NULL;
-	bp->curr = head;
-	bp->node = bp->curr;
-	if (head == NULL && bp->curr == head) {
+	set_nodes(bp);
+	if (head == NULL && bp->next == NULL && bp->prev == NULL) {
 		head = bp;
 		tail = bp;
-		bp->curr = NULL;
-		bp->next = NULL;
-		bp->prev = NULL;
-		bp->node = NULL;
+		set_nodes(bp);
 	}
 
-	else {
-		tail->next = bp;
-		bp->prev = tail;
-		tail = bp;
-		bp->next = NULL;
-		bp->curr = NULL;
+	else if(head != NULL) {
+		insert_block(bp);
 	}
 }
 
@@ -107,38 +158,24 @@ void append_block(LinkedList *bp) {
 
 void delete_block(LinkedList *bp) {
 	// Case 1: only one head node present
-	bp->curr = head;
-	bp->node = bp->curr;
 
-	if (bp == head && bp == tail && bp->curr == head) {
-		tail = NULL;
-		head = NULL;
-		bp->curr = NULL;
-		bp->node = NULL;
+	if (bp == head && bp == tail) {
+		delete_head(bp);
 	}
 
 	// Case 2: at the end of the list
-	else if (bp == tail && bp->curr == head) {
-		bp->curr = NULL;
-		bp->node = NULL;
-		bp->prev->next = NULL;
-		tail = tail->prev;
+	else if (bp == tail) {
+		delete_tail(bp);
 	}
 
 	// Case 3: other nodes than head also present, therefore set both to NULL
-	else if (bp == head && bp != tail && bp->curr == head) {
-		bp->curr = NULL;
-		bp->node = NULL;
-		bp->next->prev = NULL;
-		head = head->next;
+	else if (bp == head && bp != tail) {
+		delete_node(bp);
 	}
 	
 	else {
 		// Case 4: node in the middle of the list
-		bp->curr = NULL;
-		bp->node = NULL;
-		bp->next->prev = bp->prev;
-		bp->prev->next = bp->next;
+		delete_middle(bp);
 	}
 }
 
@@ -483,13 +520,115 @@ static bool aligned(const void* p)
 
 /*
  * mm_checkheap
+ For our heap checker, we are basically printing the different nodes like head, the current node, the previous node, the next node and the tail of our list.
+ By printing all the nodes, we are able to see whether they are set correctly in our explicit list and the heap avoiding all the overwritting problems while 
+ iterating through the list.
+ In the loop, we are also checking whether the size of our header is != 0 which iterates over the entire heap while updating pointer in the loop.
+ We are printing out the header, footer and whether the block is free or not. We are also printing the size and the address of the blocks.
+Our heap checker scans the heap and checks it for consistency. The heap checker will check for invariants which is always true.
  */
+
+static void not_inHeap(LinkedList* bp) {
+    printf("Previous node: %p\n", bp->prev);
+	printf("Current node: %p\n", bp);
+	printf("Next node: %p\n", bp->next);
+	printf("Head: %p\n", head);
+	printf("Tail: %p\n", tail);
+}
+
+int listChecker() {
+    LinkedList* temp = head;
+
+    while(temp != NULL) {
+        if(!in_heap(temp)) {
+            // ptr in free list pointing to valid free block?
+			printf("Error: Pointer not in Heap!\n");
+            not_inHeap(temp);
+			return -1;
+        }
+        // Head node correct? (Predecessor will be NULL)
+        else if(head->prev != NULL) {
+            printf("ERROR: Head not properly set in explicit free list\n");
+            not_inHeap(temp);
+            return -1;
+        }
+
+        // Tail node correct? (Successor will be NULL)
+        else if(tail->next != NULL) {
+            printf("ERROR: Tail not properly set in explicit free list");
+			not_inHeap(temp);
+            return -1;
+        }
+        else {
+            printf("No Error, explicit list executed properly");
+            return 0;
+        }
+        temp = temp->next; // To Iterate
+    }
+    printf("ERROR: List pointer to the head of the list might be incorrect. \n");
+    printf("Head: %p\n", head);
+    return -1;
+}
+
+static void print_heap(void* ptr) {
+	printf("Header: %p\n", HDRP(ptr));
+	printf("Address: %p\n", ptr);
+	printf("Footer: %p\n", FTRP(ptr));
+	printf("Free: %ld\n", GET_ALLOC(HDRP(ptr)));
+	printf("Size: %ld\n", GET_SIZE(HDRP(ptr)));
+} 
+
+int headChecker() {
+
+    LinkedList* temp2 = head;
+    void* p = heap_listp;
+
+    while (GET_SIZE(HDRP(p)) != 0 && p != NULL) {
+        if(!aligned(p)) {
+            // check if heap is aligned correctly or not
+            printf("ERROR: Heap is incosistent, heap is not alligned\n");
+            print_heap(p);
+            return -1;
+        }
+        else if (GET_ALLOC(HDRP(p)) == 0) {
+            while (p != temp2) {
+                temp2 = (void *)GET(temp2 + WSIZE);
+                if(temp2 == 0) {
+                    printf("No error \n");
+                    return 0;
+                }
+                printf("ERROR: Free block in the heap not found in the free list.\n" );
+                print_heap(p);
+                return -1;
+            }
+        }
+        else {
+            return 0;
+        }
+        p = NEXT_BLKP(p); // To iterate
+    }
+    return 0;
+}
 
 bool mm_checkheap(int lineno)
 {
 #ifdef DEBUG
-    /* Write code to check heap invariants here */
-    /* IMPLEMENT THIS */
-#endif /* DEBUG */
-    return true;
+    // Write code to check heap invariants here
+#endif // DEBUG
+    if (listChecker() == -1 || headChecker() == -1) {
+		printf("Something is wrong with the listChecker() or the headChecker");
+        return false;
+    }
+    else if (listChecker() == 0 && headChecker() == -1) {
+		printf("Something is wrong with the headChecker()");
+        return false;
+    }
+    else if (listChecker() == -1 && headChecker() == 0) {
+		printf("Something is wrong with the listChecker()");
+        return false;
+    }
+    else {
+		printf("The heap checker is working fine and there is no problem with the heap and the list");
+        return true;
+    }
 }
